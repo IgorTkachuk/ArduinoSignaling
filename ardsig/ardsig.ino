@@ -9,8 +9,17 @@ SoftwareSerial SIM800(8, 9);                    // RX, TX
 
 #include <DHT.h>                                //библиотека для работы датчика температуры и влажности
 #include <DHT_U.h>
-#define DHTPIN 3                                //датчик подключен ко входу 3
+#define DHTPIN 3                                //датчик DHT подключен ко входу 3
 #define DHTTYPE DHT22 
+
+#define IRDPIN 6                                //датчик HC-SR501 подключен ко входу 4
+
+#define GKNPIN 2                                //датчик HC-SR501 подключен ко входу 4
+
+#define DISARM 0
+#define ARM 1
+#define PREALARM 2
+#define ALARM 3
 
 float temph[2];                                 //массив для температуры и влажности
 volatile unsigned long int tempTimer = 0;       //переменная для таймера обновления показаний температуры и влажности
@@ -19,6 +28,11 @@ volatile boolean tempTimerOn = 0;               //переменная для з
 
 String msgbody = ""; 
 String msgphone = ""; 
+
+int ird_value = 0;                              //переменная для хранения статуса датчика движения
+int gkn_value = 0;
+
+int sysStatus = DISARM;
 
 DHT dht(DHTPIN, DHTTYPE);                       //настройка датчика температуры и влажности
 
@@ -37,6 +51,8 @@ ISR (TIMER0_COMPA_vect)                         //функция, вызывае
 void setup() {
 
   dht.begin();                          //инициализация датчика температуры
+  pinMode(IRDPIN, INPUT);               //настройка пина Arduino на который подключен датчик HC-SR501
+  pinMode(GKNPIN, INPUT);
   
   //Настройка таймера на срабатывание каждые 0,001 сек
   TCCR0A |= (1 << WGM01);
@@ -56,7 +72,8 @@ void setup() {
    //_response = sendATCommand("AT+CLIP=1", true);    // Включаем АОН 
    //_response = sendATCommand("AT+DDET=1", true);    // Включаем DTMF 
    _response = sendATCommand("AT+CMGF=1;&W", true);   // Включаем текстовый режима SMS (Text mode) и сразу сохраняем значение (AT&W)! 
-  
+
+  sysStatus = ARM;                                    //преводим систему в режим охраны
 }
 
 void loop() {
@@ -87,6 +104,24 @@ void loop() {
       }
     } 
   } 
+
+  ird_value = digitalRead(IRDPIN); 
+  if (HIGH == ird_value && sysStatus == ARM) {
+    Serial.println("ALARM");
+    sysStatus = ALARM;                 //преводим систему в тревоги
+    sendSMS("+380673711661", "ALARM"); // Если сработал датчик движения - отсылаем SMS с извещением
+  } else {
+   //ничего не делаем 
+  }
+
+  gkn_value = digitalRead(GKNPIN); 
+  if (LOW == gkn_value && sysStatus == ARM) {
+    Serial.println("ALARM");
+    sysStatus = ALARM;                 //преводим систему в тревоги
+    sendSMS("+380673711661", "ALARM"); // Если сработал датчик движения - отсылаем SMS с извещением
+  } else {
+   //ничего не делаем 
+  }
   
   if (Serial.available()) {                            // Ожидаем команды по Serial... 
     SIM800.write(Serial.read());                       // ...и отправляем полученную команду модему 
