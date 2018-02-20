@@ -16,9 +16,10 @@ SoftwareSerial SIM800(8, 9);                    // RX, TX
                                                 //Для Arduino Nano выводы I2C: A4 (SDA) и A5 (SCL).
 #include <RTClib.h>                             //Библиотека часов
 
-#define IRDPIN 6                                //датчик HC-SR501 подключен ко входу 4
-#define RELE1PIN 3                              //сигнальный контакт реле "один" подключен ко входу 4
+#define IRDPIN 6                                //датчик HC-SR501 подключен ко входу 6
+#define RELE1PIN 3                              //сигнальный контакт реле "один" подключен ко входу 3
 #define GKNPIN 2                                //геркон подключен ко входу 2
+#define BUZZERPIN 4                             //пищалка подключена ко входу 4
 
 #define DISARM 0
 #define ARM 1
@@ -91,6 +92,8 @@ void setup() {
   pinMode(IRDPIN, INPUT);               //настройка пина Arduino на который подключен датчик HC-SR501
   pinMode(GKNPIN, INPUT);               //настройка пина Arduino на который подключен геркон
   pinMode(RELE1PIN, OUTPUT);            //настройка пина Arduino на который подключено первое реле
+  pinMode(BUZZERPIN, OUTPUT);           //настройка пина Arduino на который подключена пищалка
+  digitalWrite(BUZZERPIN, HIGH);        //устанавливаем на пине пищалки логическкую еденицу, т.к. пишут, что "Сигналинг инверсный, пищит при логическом нуле"
   
   //Настройка таймера на срабатывание каждые 0,001 сек
   TCCR0A |= (1 << WGM01);
@@ -196,8 +199,12 @@ void loop() {
 void disArm(){                                          //преводим систему в режим ожидания
   sysStatus = DISARM;
   sendSMS(msgphone, "ARM OFF");
-  // выключаем реле
-  // выключаем динамик
+
+  lightOn = false; // выключаем освещение
+  digitalWrite(RELE1PIN, LOW);
+
+  //выключаем пищалку
+  digitalWrite(BUZZERPIN, HIGH);
 }
 
 void arm(){                                             //преводим систему в режим охраны
@@ -213,6 +220,12 @@ void alarm(){
     sysStatus = ALARM;                                   //преводим систему в тревоги
     Serial.println(ALARMSG);
     sendSMS("+380673711661", ALARMSG); 
+
+    lightOn = true; // включаем освещение
+    digitalWrite(RELE1PIN, HIGH);
+
+    //включаем пищалку
+    digitalWrite(BUZZERPIN, LOW);
 }
 
 void getDHTValue()                                       //функция считывания показаний датчика DHT22 каждые 1000 мсек.
