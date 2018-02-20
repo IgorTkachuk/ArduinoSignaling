@@ -13,11 +13,12 @@ SoftwareSerial SIM800(8, 9);                    // RX, TX
 #define DHTTYPE DHT22 
 
 #include <Wire.h>                               //Date and time functions using a DS1307 RTC connected via I2C and Wire lib
+                                                //Для Arduino Nano выводы I2C: A4 (SDA) и A5 (SCL).
 #include <RTClib.h>                             //Библиотека часов
 
 #define IRDPIN 6                                //датчик HC-SR501 подключен ко входу 4
-
-#define GKNPIN 2                                //датчик HC-SR501 подключен ко входу 4
+#define RELE1PIN 3                              //сигнальный контакт реле "один" подключен ко входу 4
+#define GKNPIN 2                                //геркон подключен ко входу 2
 
 #define DISARM 0
 #define ARM 1
@@ -27,22 +28,34 @@ SoftwareSerial SIM800(8, 9);                    // RX, TX
 
 #define USSDBALCMD *111#                        //USSD-запрос для получения баланса на симке
 
+                                                //желательно хранить эти значения в EEPROM и иметь возможность изменять их посредством интерфейса или SMS
+#define LIGHTSHEDON 22                          //время включения освещения по расписаню
+#define LIGHTSHEDOFF 23                         //время отключения освещения по расписаню
 
 float temph[2];                                 //массив для температуры и влажности
 volatile unsigned long int tempTimer = 0;       //переменная для таймера обновления показаний температуры и влажности
 volatile unsigned long int tempClock = 0;       //переменная для сохранения значения таймера
 volatile boolean tempTimerOn = 0;               //переменная для запуска/остановки таймера
 
+volatile unsigned long int shedTimer = 0;       //переменная для таймера обновления показаний температуры и влажности
+volatile unsigned long int shedClock = 0;       //переменная для сохранения значения таймера
+volatile boolean shedTimerOn = 0;               //переменная для запуска/остановки таймера
+
 String msgbody = ""; 
 String msgphone = ""; 
 String balphone = "";                           //переменная для хранения номера телефона абонента запросившего баланс по карте
 
+bool lightOn = false;                           //переменная для хранения состояния освещения
+
 int ird_value = 0;                              //переменная для хранения статуса датчика движения
 int gkn_value = 0;
+
+bool rtc_present = false;                       //переменная хранит статус подключения RTC
 
 int sysStatus = DISARM;                         // переменная хранит текущее состояние системы: DISARM, ARM, etc.
 
 DHT dht(DHTPIN, DHTTYPE);                       //настройка датчика температуры и влажности
+RTC_DS1307 rtc;
 
 String _response = "";                          // Переменная для хранения ответа модуля SIM800L
 
@@ -59,8 +72,25 @@ ISR (TIMER0_COMPA_vect)                         //функция, вызывае
 void setup() {
 
   dht.begin();                          //инициализация датчика температуры
+
+  if (! rtc.begin()) {                  //инициализация RTC
+    Serial.println("Couldn't find RTC");
+  } else {
+    rtc_present = true;
+  }
+
+  if (! rtc.isrunning() && rtc_present) {
+    Serial.println("RTC is NOT running!");
+    // following line sets the RTC to the date & time this sketch was compiled
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    // This line sets the RTC with an explicit date & time, for example to set
+    // January 21, 2014 at 3am you would call:
+    // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
+  }
+  
   pinMode(IRDPIN, INPUT);               //настройка пина Arduino на который подключен датчик HC-SR501
-  pinMode(GKNPIN, INPUT);
+  pinMode(GKNPIN, INPUT);               //настройка пина Arduino на который подключен геркон
+  pinMode(RELE1PIN, OUTPUT);            //настройка пина Arduino на который подключено первое реле
   
   //Настройка таймера на срабатывание каждые 0,001 сек
   TCCR0A |= (1 << WGM01);
@@ -259,8 +289,8 @@ void parseSMS(String msg) {
 }
 
 void sendSMS(String phone, String message) { 
-  sendATCommand("AT+CMGS=\"" + phone + "\"", true);           // Переходим в режим ввода текстового сообщения 
-  sendATCommand(message + "\r\n" + (String)((char)26), true); // После текста отправляем перенос строки и Ctrl+Z 
+  sendATCommand("AT+CMGS=\"" + phone + "\"", true);                 // Переходим в режим ввода текстового сообщения 
+  sendATCommand(message + "\r\n" + (String)((char)26), true);       // После текста отправляем перенос строки и Ctrl+Z 
 }
 
 float getFloatFromString(String str) {                              // Функция извлечения цифр из сообщения - для парсинга баланса из USSD-запроса 
@@ -286,5 +316,32 @@ float getFloatFromString(String str) {                              // Функ�
     }
 
     return result.toFloat();                                        // Возвращаем полученное число. 
+}
+
+void sheduleLight (){
+    cli();
+    shedTimerOn = 1;
+    shedClock = shedTimer;
+    sei();
+    
+    if(shedClock >= 1000)
+    {
+        cli();
+        tempTimerOn = 1;
+        tempTimer = 0;
+        tempClock = 0;
+        sei();
+        
+        DateTime now = rtc.now();
+        if (now.hour() >= LIGHTSHEDON && !lightOn){
+          lightOn = true; // включаем освещение
+          digitalWrite(RELE1PIN, HIGH);
+        }
+
+        if (now.hour() <= LIGHTSHEDOFF && lightOn){
+          lightOn = false; // выключаем освещение
+          digitalWrite(RELE1PIN, LOW);
+        }
+    }
 }
 
