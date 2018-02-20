@@ -12,6 +12,9 @@ SoftwareSerial SIM800(8, 9);                    // RX, TX
 #define DHTPIN 3                                //датчик DHT подключен ко входу 3
 #define DHTTYPE DHT22 
 
+#include <Wire.h>                               //Date and time functions using a DS1307 RTC connected via I2C and Wire lib
+#include <RTClib.h>                             //Библиотека часов
+
 #define IRDPIN 6                                //датчик HC-SR501 подключен ко входу 4
 
 #define GKNPIN 2                                //датчик HC-SR501 подключен ко входу 4
@@ -20,6 +23,10 @@ SoftwareSerial SIM800(8, 9);                    // RX, TX
 #define ARM 1
 #define PREALARM 2
 #define ALARM 3
+#define ALARMSG "ALARM"                         //сообщение отсылаемое посредством SMS в момент перевода системы в статус ТРЕВОГА
+
+#define USSDBALCMD *111#                        //USSD-запрос для получения баланса на симке
+
 
 float temph[2];                                 //массив для температуры и влажности
 volatile unsigned long int tempTimer = 0;       //переменная для таймера обновления показаний температуры и влажности
@@ -28,11 +35,12 @@ volatile boolean tempTimerOn = 0;               //переменная для з
 
 String msgbody = ""; 
 String msgphone = ""; 
+String balphone = "";                           //переменная для хранения номера телефона абонента запросившего баланс по карте
 
 int ird_value = 0;                              //переменная для хранения статуса датчика движения
 int gkn_value = 0;
 
-int sysStatus = DISARM;
+int sysStatus = DISARM;                         // переменная хранит текущее состояние системы: DISARM, ARM, etc.
 
 DHT dht(DHTPIN, DHTTYPE);                       //настройка датчика температуры и влажности
 
@@ -73,7 +81,7 @@ void setup() {
    //_response = sendATCommand("AT+DDET=1", true);    // Включаем DTMF 
    _response = sendATCommand("AT+CMGF=1;&W", true);   // Включаем текстовый режима SMS (Text mode) и сразу сохраняем значение (AT&W)! 
 
-  sysStatus = ARM;                                    //преводим систему в режим охраны
+   sysStatus = DISARM;                                //преводим систему в режим ожидания
 }
 
 void loop() {
@@ -84,6 +92,9 @@ void loop() {
     _response.trim();                                  // Убираем лишние пробелы в начале и конце 
     Serial.println(_response);                         // Если нужно выводим в монитор порта 
     //.... 
+
+
+    //ОБРАБОТКА ВХОДЯЩЕГО SMS
     if (_response.startsWith("+CMTI:")) {              // Пришло сообщение об получении SMS 
       int index = _response.lastIndexOf(",");          // Находим последнюю запятую, перед индексом 
       String result = _response.substring(index + 1, _response.length()); // Получаем индекс 
@@ -97,28 +108,51 @@ void loop() {
 
        // Проверяем, чтобы длина номера была больше 6 цифр, и номер должен быть в списке
       if (msgphone.length() >= 7 && whiteListPhones.indexOf(msgphone) >= 0) {
-        sendSMS(msgphone, String("t=" + String(temph[0]) + "; h=" + String(temph[1]))); // Если да, то отвечаем на запрос
+
+        msgbody.toUpperCase();
+        
+        if(msgbody == "GHT"){
+          sendSMS(msgphone, String("t=" + String(temph[0]) + "; h=" + String(temph[1]))); // Если да, то отвечаем на запрос
+        }
+        else if (msgbody == "ARM"){
+          arm();
+        }
+        else if (msgbody == "DARM"){
+          disArm();
+        }
+        else if (msgbody == "GBAL"){
+          balphone = msgphone;                                                   // сохраняем номер телефона абонента запросившего баланс, для последующего ответа на него
+          sendATCommand("AT+CUSD=1,\"USSDBALCMD\"", true);
+        }
       }
       else {
-                                                               // Если нет, не делаем ничего
+        // Если нет, не делаем ничего
       }
     } 
+
+    //ОБРАБОТКА ВХОДЯЩЕГО USSD (предполагается, что сообщение содержит текущий баланс на симке)
+    if (_response.startsWith("+CUSD:")) {                                         // Пришло уведомление о USSD-ответе 
+      if (_response.indexOf("\"") > -1) {                                         // Если ответ содержит кавычки, значит есть сообщение (предохранитель от "пустых" USSD-ответов) 
+        String msgBalance = _response.substring(_response.indexOf("\"") + 2);     // Получаем непосредственно текст 
+        msgBalance = msgBalance.substring(0, msgBalance.indexOf("\"")); 
+        Serial.println("USSD: " + msgBalance);                                    // Выводим полученный ответ 
+        sendSMS(balphone, "BAL: " + String( getFloatFromString(msgBalance) ) );   // Отправляем ответ на ранее зафиксированный номер
+        balphone = "";                                                            // Очищаем ранее зафиксированный номер телефона
+      }
+    }
   } 
 
+  //РЕАКЦИЯ СИСТЕМЫ НА ИЗМЕНЕНИЕ СОСТОЯНИЯ ДАТЧИКОВ В РЕЖИМЕ ОХРАНЫ sysStatus == ARM
   ird_value = digitalRead(IRDPIN); 
-  if (HIGH == ird_value && sysStatus == ARM) {
-    Serial.println("ALARM");
-    sysStatus = ALARM;                 //преводим систему в тревоги
-    sendSMS("+380673711661", "ALARM"); // Если сработал датчик движения - отсылаем SMS с извещением
+  if (HIGH == ird_value && sysStatus == ARM) {        // Если сработал датчик движения - отсылаем SMS с извещением
+    alarm();
   } else {
    //ничего не делаем 
   }
 
   gkn_value = digitalRead(GKNPIN); 
-  if (LOW == gkn_value && sysStatus == ARM) {
-    Serial.println("ALARM");
-    sysStatus = ALARM;                 //преводим систему в тревоги
-    sendSMS("+380673711661", "ALARM"); // Если сработал датчик движения - отсылаем SMS с извещением
+  if (LOW == gkn_value && sysStatus == ARM) {         // Если сработал геркон - отсылаем SMS с извещением
+    alarm();
   } else {
    //ничего не делаем 
   }
@@ -129,12 +163,16 @@ void loop() {
 }
 
 
-void disArm(){
-  
+void disArm(){                                          //преводим систему в режим ожидания
+  sysStatus = DISARM;
+  sendSMS(msgphone, "ARM OFF");
+  // выключаем реле
+  // выключаем динамик
 }
 
-void arm(){
-  
+void arm(){                                             //преводим систему в режим охраны
+  sysStatus = ARM;
+  sendSMS(msgphone, "ARM ON");
 }
 
 void preAlarm(){
@@ -142,7 +180,9 @@ void preAlarm(){
 }
 
 void alarm(){
-  
+    sysStatus = ALARM;                                   //преводим систему в тревоги
+    Serial.println(ALARMSG);
+    sendSMS("+380673711661", ALARMSG); 
 }
 
 void getDHTValue()                                       //функция считывания показаний датчика DHT22 каждые 1000 мсек.
@@ -221,5 +261,30 @@ void parseSMS(String msg) {
 void sendSMS(String phone, String message) { 
   sendATCommand("AT+CMGS=\"" + phone + "\"", true);           // Переходим в режим ввода текстового сообщения 
   sendATCommand(message + "\r\n" + (String)((char)26), true); // После текста отправляем перенос строки и Ctrl+Z 
+}
+
+float getFloatFromString(String str) {                              // Функция извлечения цифр из сообщения - для парсинга баланса из USSD-запроса 
+    bool flag = false; 
+    String result = ""; 
+    
+    str.replace(",", ".");                                          // Если в качестве разделителя десятичных используется запятая - меняем её на точку. 
+    
+    for (int i = 0; i < str.length(); i++) { 
+      if (isDigit(str[i]) || (str[i] == (char)46 && flag)) {        // Если начинается группа цифр (при этом, на точку без цифр не обращаем внимания), 
+        if (result == "" && i > 0 && (String)str[i - 1] == "-") {   // Нельзя забывать, что баланс может быть отрицательным 
+          result += "-";                                            // Добавляем знак в начале 
+        } 
+        
+        result += str[i];                                           // начинаем собирать их вместе 
+        
+        if (!flag) flag = true;                                     // Выставляем флаг, который указывает на то, что сборка числа началась. 
+        } else {                                                    // Если цифры закончились и флаг говорит о том, что сборка уже была, 
+          if (str[i] != (char)32) {                                 // Если порядок числа отделен пробелом - игнорируем его, иначе... 
+            if (flag) break;                                        // ...считаем, что все. 
+          }
+        }
+    }
+
+    return result.toFloat();                                        // Возвращаем полученное число. 
 }
 
