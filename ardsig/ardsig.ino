@@ -17,7 +17,7 @@ SoftwareSerial SIM800(8, 9);                    // RX, TX
 #include <RTClib.h>                             //Библиотека часов
 
 #define IRDPIN 6                                //датчик HC-SR501 подключен ко входу 6
-#define RELE1PIN 3                              //сигнальный контакт реле "один" подключен ко входу 3
+#define RELE1PIN 7                              //сигнальный контакт реле "один" подключен ко входу 3
 #define GKNPIN 2                                //геркон подключен ко входу 2
 #define BUZZERPIN 4                             //пищалка подключена ко входу 4
 
@@ -30,8 +30,10 @@ SoftwareSerial SIM800(8, 9);                    // RX, TX
 #define USSDBALCMD *111#                        //USSD-запрос для получения баланса на симке
 
                                                 //желательно хранить эти значения в EEPROM и иметь возможность изменять их посредством интерфейса или SMS
-#define LIGHTSHEDON 22                          //время включения освещения по расписаню
-#define LIGHTSHEDOFF 23                         //время отключения освещения по расписаню
+#define LIGHTSHEDONHOUR 15                          //время включения освещения по расписаню (ч.)
+#define LIGHTSHEDOFFHOUR 15                         //время отключения освещения по расписаню (ч.)
+#define LIGHTSHEDONMIN 23                           //время включения освещения по расписаню (м.)
+#define LIGHTSHEDOFFMIN 24                          //время отключения освещения по расписаню (м.)
 
 float temph[2];                                 //массив для температуры и влажности
 volatile unsigned long int tempTimer = 0;       //переменная для таймера обновления показаний температуры и влажности
@@ -56,7 +58,7 @@ bool rtc_present = false;                       //переменная хран�
 int sysStatus = DISARM;                         // переменная хранит текущее состояние системы: DISARM, ARM, etc.
 
 DHT dht(DHTPIN, DHTTYPE);                       //настройка датчика температуры и влажности
-RTC_DS1307 rtc;
+RTC_DS3231 rtc;
 
 String _response = "";                          // Переменная для хранения ответа модуля SIM800L
 
@@ -65,6 +67,11 @@ ISR (TIMER0_COMPA_vect)                         //функция, вызывае
   if(tempTimerOn == 1)                          //если таймер включен
   {
       tempTimer++;                              //увеличение значения таймера на +1 каждые 0,001 сек
+  }
+  
+  if(shedTimerOn == 1)                          //если таймер включен
+  {
+      shedTimer++;                              //увеличение значения таймера на +1 каждые 0,001 сек
   }
 }
 
@@ -80,7 +87,7 @@ void setup() {
     rtc_present = true;
   }
 
-  if (! rtc.isrunning() && rtc_present) {
+  if (rtc.lostPower() && rtc_present) {
     Serial.println("RTC is NOT running!");
     // following line sets the RTC to the date & time this sketch was compiled
     rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
@@ -92,6 +99,7 @@ void setup() {
   pinMode(IRDPIN, INPUT);               //настройка пина Arduino на который подключен датчик HC-SR501
   pinMode(GKNPIN, INPUT);               //настройка пина Arduino на который подключен геркон
   pinMode(RELE1PIN, OUTPUT);            //настройка пина Arduino на который подключено первое реле
+  digitalWrite(RELE1PIN, HIGH);
   pinMode(BUZZERPIN, OUTPUT);           //настройка пина Arduino на который подключена пищалка
   digitalWrite(BUZZERPIN, HIGH);        //устанавливаем на пине пищалки логическкую еденицу, т.к. пишут, что "Сигналинг инверсный, пищит при логическом нуле"
   
@@ -119,6 +127,7 @@ void setup() {
 
 void loop() {
   getDHTValue();
+  sheduleLight();
 
   if (SIM800.available()) {                            // Если модем, что-то отправил нам в порт... 
     _response = waitResponse();                        // Получаем ответ от модема для анализа 
@@ -155,7 +164,7 @@ void loop() {
         }
         else if (msgbody == "GBAL"){
           balphone = msgphone;                                                   // сохраняем номер телефона абонента запросившего баланс, для последующего ответа на него
-          sendATCommand("AT+CUSD=1,\"USSDBALCMD\"", true);
+          sendATCommand("AT+CUSD=1,\"*111#\"", true);
         }
       }
       else {
@@ -201,7 +210,7 @@ void disArm(){                                          //преводим си�
   sendSMS(msgphone, "ARM OFF");
 
   lightOn = false; // выключаем освещение
-  digitalWrite(RELE1PIN, LOW);
+  digitalWrite(RELE1PIN, HIGH);
 
   //выключаем пищалку
   digitalWrite(BUZZERPIN, HIGH);
@@ -222,7 +231,7 @@ void alarm(){
     sendSMS("+380673711661", ALARMSG); 
 
     lightOn = true; // включаем освещение
-    digitalWrite(RELE1PIN, HIGH);
+    digitalWrite(RELE1PIN, LOW);
 
     //включаем пищалку
     digitalWrite(BUZZERPIN, LOW);
@@ -340,20 +349,23 @@ void sheduleLight (){
     if(shedClock >= 1000)
     {
         cli();
-        tempTimerOn = 1;
-        tempTimer = 0;
-        tempClock = 0;
+        shedTimerOn = 1;
+        shedTimer = 0;
+        shedClock = 0;
         sei();
         
         DateTime now = rtc.now();
-        if (now.hour() >= LIGHTSHEDON && !lightOn){
-          lightOn = true; // включаем освещение
-          digitalWrite(RELE1PIN, HIGH);
-        }
-
-        if (now.hour() <= LIGHTSHEDOFF && lightOn){
-          lightOn = false; // выключаем освещение
-          digitalWrite(RELE1PIN, LOW);
+ 
+        if (now.hour() >= LIGHTSHEDONHOUR  && now.minute() >= LIGHTSHEDONMIN && now.hour() <= LIGHTSHEDOFFHOUR && now.minute() <= LIGHTSHEDOFFMIN ){
+          if(!lightOn){
+            lightOn = true; // включаем освещение
+            digitalWrite(RELE1PIN, LOW);
+          }
+        } else {
+            if (sysStatus != ALARM && lightOn ){
+              lightOn = false; // выключаем освещение
+              digitalWrite(RELE1PIN, HIGH);
+            }
         }
     }
 }
