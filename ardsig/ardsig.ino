@@ -30,10 +30,13 @@ SoftwareSerial SIM800(8, 9);                    // RX, TX
 #define USSDBALCMD *111#                        //USSD-запрос для получения баланса на симке
 
                                                 //желательно хранить эти значения в EEPROM и иметь возможность изменять их посредством интерфейса или SMS
-#define LIGHTSHEDONHOUR 15                          //время включения освещения по расписаню (ч.)
-#define LIGHTSHEDOFFHOUR 15                         //время отключения освещения по расписаню (ч.)
-#define LIGHTSHEDONMIN 23                           //время включения освещения по расписаню (м.)
-#define LIGHTSHEDOFFMIN 24                          //время отключения освещения по расписаню (м.)
+#define LIGHTSHEDONHOUR 19                      //время включения освещения по расписаню (ч.)
+#define LIGHTSHEDOFFHOUR 19                     //время отключения освещения по расписаню (ч.)
+#define LIGHTSHEDONMIN 21                       //время включения освещения по расписаню (м.)
+#define LIGHTSHEDOFFMIN 22                      //время отключения освещения по расписаню (м.)
+
+#define DHTTIMERPERIOD  1000                    //время в мсек. через которое обновляются показания температуры/влажности
+#define SHEDTIMERPERIOD 5000                    //время в мсек. через которое проверяется рассписание планировщика задач
 
 float temph[2];                                 //массив для температуры и влажности
 volatile unsigned long int tempTimer = 0;       //переменная для таймера обновления показаний температуры и влажности
@@ -244,7 +247,7 @@ void getDHTValue()                                       //функция счи
     tempClock = tempTimer;
     sei();
     
-    if(tempClock >= 1000)
+    if(tempClock >= DHTTIMERPERIOD)
     {
         cli();
         tempTimerOn = 1;
@@ -346,7 +349,7 @@ void sheduleLight (){
     shedClock = shedTimer;
     sei();
     
-    if(shedClock >= 1000)
+    if(shedClock >= SHEDTIMERPERIOD)
     {
         cli();
         shedTimerOn = 1;
@@ -356,7 +359,7 @@ void sheduleLight (){
         
         DateTime now = rtc.now();
  
-        if (now.hour() >= LIGHTSHEDONHOUR  && now.minute() >= LIGHTSHEDONMIN && now.hour() <= LIGHTSHEDOFFHOUR && now.minute() <= LIGHTSHEDOFFMIN ){
+        if (now.hour() >= LIGHTSHEDONHOUR  && now.minute() >= LIGHTSHEDONMIN && now.hour() <= LIGHTSHEDOFFHOUR && now.minute() < LIGHTSHEDOFFMIN ){
           if(!lightOn){
             lightOn = true; // включаем освещение
             digitalWrite(RELE1PIN, LOW);
